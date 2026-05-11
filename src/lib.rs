@@ -1,5 +1,5 @@
 #![deny(warnings)]
-#![forbid(unsafe_code)]
+#![allow(unsafe_code)] // FFI requires unsafe code
 #![warn(missing_docs)]
 
 //! PAM Parallel Fprint Module
@@ -54,7 +54,7 @@ const PAM_CRED_ERR: c_int = 17;
 const PAM_NO_MODULE_DATA: c_int = 18;
 const PAM_IGNORE: c_int = 25;
 
-/// C extern functions for PAM
+// C extern functions for PAM
 extern "C" {
     /// Get user from PAM handle
     pub fn pam_get_user(
