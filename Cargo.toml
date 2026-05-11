@@ -6,9 +6,9 @@ authors = ["Selim Cifci"]
 description = "A Linux-PAM module that allows for fingerprint (fprintd) and password authorization in parallel"
 license = "GPL-3.0"
 
-[lib]
-crate-type = ["cdylib"]
+[[lib]]
 name = "pam_parallel_fprint"
+crate-type = ["cdylib"]
 path = "src/lib.rs"
 
 [dependencies]
