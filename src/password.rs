@@ -3,34 +3,122 @@
 //! Handles password input and verification through PAM's conversation function.
 
 use std::sync::{Arc, Mutex};
+use std::ffi::{CStr, CString};
+use libc::c_char;
 use crate::auth_data::AuthData;
+use crate::AuthResult;
 
-/// Check password by prompting the user
+/// PAM conversation item types
+const PAM_PROMPT_ECHO_OFF: i32 = 1;
+
+/// PAM conversation response type
+#[repr(C)]
+pub struct PamResponse {
+    pub resp: *mut c_char,
+    pub resp_retcode: i32,
+}
+
+/// PAM conversation message type
+#[repr(C)]
+pub struct PamMessage {
+    pub msg_style: i32,
+    pub msg: *const c_char,
+}
+
+/// PAM conversation function type
+pub type PamConv = extern "C" fn(
+    num_msg: i32,
+    msg: *const *const PamMessage,
+    resp: *mut *mut PamResponse,
+    appdata_ptr: *mut std::ffi::c_void,
+) -> i32;
+
+extern "C" {
+    /// Set PAM item
+    pub fn pam_set_item(
+        pamh: *const std::ffi::c_void,
+        item_type: i32,
+        item: *const std::ffi::c_void,
+    ) -> i32;
+
+    /// Get PAM conversation function
+    pub fn pam_get_item(
+        pamh: *const std::ffi::c_void,
+        item_type: i32,
+        item: *mut *const std::ffi::c_void,
+    ) -> i32;
+}
+
+const PAM_CONV: i32 = 2;
+const PAM_AUTHTOK: i32 = 6;
+const PAM_SUCCESS: i32 = 0;
+
+/// Check password by prompting the user through PAM conversation
 pub fn check_password(
     _username: &str,
+    pamh: *const std::ffi::c_void,
     auth_data: &Arc<Mutex<AuthData>>,
 ) -> Result<(), String> {
-    // In a real PAM module, we would use the conversation function (pam_conv)
-    // to prompt the user for a password.
-    // The conversation function is part of the PAM handle and would be used to:
-    // 1. Display a password prompt to the user
-    // 2. Get the user's password input
-    // 3. Verify it against the system (usually through PAM's pam_unix module)
-    //
-    // For now, this is a simplified implementation.
-    // The password verification would happen through PAM conversation,
-    // which is handled by the PAM framework itself.
-
     // Check if fingerprint already succeeded
-    let data = auth_data.lock().map_err(|e| format!("Lock error: {}", e))?;
-    if data.is_done() {
-        return Ok(());
+    {
+        let data = auth_data.lock().map_err(|e| format!("Lock error: {}", e))?;
+        if data.is_done() {
+            return Ok(());
+        }
     }
-    drop(data);
 
-    // In a real implementation, password would be entered through PAM conversation
-    // and we would mark the result here
-    // For now, we just wait for fingerprint
+    // Get the PAM conversation function
+    let conv_ptr = unsafe {
+        let mut conv_ptr: *const std::ffi::c_void = std::ptr::null();
+        let ret = pam_get_item(pamh, PAM_CONV, &mut conv_ptr as *mut _);
+        if ret != PAM_SUCCESS || conv_ptr.is_null() {
+            return Err("Failed to get PAM conversation function".to_string());
+        }
+        conv_ptr
+    };
+
+    // Prompt for password
+    let prompt = CString::new("Fingerprint or Password: ")
+        .map_err(|_| "Failed to create prompt string".to_string())?;
+
+    // Call conversation function
+    unsafe {
+        let conv_fn: PamConv = std::mem::transmute(conv_ptr);
+
+        // Prepare message
+        let msg = PamMessage {
+            msg_style: PAM_PROMPT_ECHO_OFF,
+            msg: prompt.as_ptr(),
+        };
+        let msg_ptr = &msg as *const _;
+        let mut resp_ptr: *mut PamResponse = std::ptr::null_mut();
+
+        let ret = conv_fn(
+            1,
+            &msg_ptr as *const _,
+            &mut resp_ptr as *mut _,
+            std::ptr::null_mut(),
+        );
+
+        if ret == PAM_SUCCESS && !resp_ptr.is_null() && !(*resp_ptr).resp.is_null() {
+            // Get the password from response
+            let password_cstr = CStr::from_ptr((*resp_ptr).resp);
+            let password_cstring = CString::from(password_cstr);
+
+            // Set the password in PAM
+            pam_set_item(
+                pamh,
+                PAM_AUTHTOK,
+                password_cstring.as_ptr() as *const std::ffi::c_void,
+            );
+
+            // Mark as password entered
+            if let Ok(mut data) = auth_data.lock() {
+                data.set_result(AuthResult::PasswordEntered);
+                data.mark_done();
+            }
+        }
+    }
 
     Ok(())
 }

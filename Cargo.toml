@@ -18,6 +18,7 @@ syslog = "6.1"
 log = "0.4"
 libc = "0.2"
 thiserror = "1.0"
+nix = { version = "0.29", features = ["process"] }
 
 [profile.release]
 opt-level = 3

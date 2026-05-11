@@ -8,7 +8,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::ffi::CStr;
-use libc::{c_int, c_char};
+use libc::{c_int, c_char, isatty};
 
 mod auth_data;
 mod fprint;
@@ -98,6 +98,27 @@ fn get_pam_user(pamh: *const std::ffi::c_void) -> Option<String> {
     }
 }
 
+/// Check if running in a terminal
+fn is_terminal() -> bool {
+    unsafe { isatty(0) == 1 }
+}
+
+/// Flush terminal input buffer
+fn flush_terminal() {
+    use nix::unistd::STDIN_FILENO;
+    use nix::ioctl::*;
+    use libc::TCIFLUSH;
+
+    unsafe {
+        let _ = tcflush(STDIN_FILENO, TCIFLUSH);
+    }
+}
+
+extern "C" {
+    /// Flush terminal input
+    pub fn tcflush(fd: i32, queue_selector: i32) -> i32;
+}
+
 /// Main PAM authentication entry point
 ///
 /// # Arguments
@@ -117,6 +138,8 @@ pub extern "C" fn pam_sm_authenticate(
     _argc: c_int,
     _argv: *const *const c_char,
 ) -> c_int {
+    let in_terminal = is_terminal();
+
     // Get username
     let username = match get_pam_user(pamh) {
         Some(u) => u,
@@ -137,9 +160,10 @@ pub extern "C" fn pam_sm_authenticate(
     // Spawn password authentication task
     let pwd_data = Arc::clone(&auth_data);
     let pwd_username = username.clone();
+    let pwd_pamh = pamh;
     
     let pwd_handle = std::thread::spawn(move || {
-        let _ = password::check_password(&pwd_username, &pwd_data);
+        let _ = password::check_password(&pwd_username, pwd_pamh, &pwd_data);
     });
 
     // Wait for either thread to complete or timeout
@@ -165,11 +189,25 @@ pub extern "C" fn pam_sm_authenticate(
 
     // Get final authentication result
     let data = auth_data.lock().unwrap();
-    match data.get_result() {
-        AuthResult::FingerprintMatch => PAM_SUCCESS,
+    let result = match data.get_result() {
+        AuthResult::FingerprintMatch => {
+            if in_terminal {
+                println!();
+            }
+            PAM_SUCCESS
+        }
         AuthResult::PasswordEntered => PAM_IGNORE,
         AuthResult::Failed => PAM_AUTH_ERR,
+    };
+
+    drop(data);
+
+    // Flush terminal if in terminal
+    if in_terminal {
+        flush_terminal();
     }
+
+    result
 }
 
 /// Set credentials PAM function (required stub)
