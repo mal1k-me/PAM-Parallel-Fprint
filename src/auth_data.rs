@@ -1,49 +1,45 @@
-//! Shared authentication data structure with thread-safe synchronization
+//! Authentication data shared between threads
+//!
+//! Provides a thread-safe way to share authentication state between
+//! fingerprint and password authentication tasks.
 
 use crate::AuthResult;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-/// Thread-safe authentication state
+/// Shared authentication data
 #[derive(Debug)]
 pub struct AuthData {
     result: AuthResult,
-    done: bool,
+    done: AtomicBool,
 }
 
 impl AuthData {
-    /// Create a new authentication data structure
+    /// Create new authentication data
     pub fn new() -> Self {
         Self {
             result: AuthResult::Failed,
-            done: false,
+            done: AtomicBool::new(false),
         }
     }
 
-    /// Check if authentication is complete
-    pub fn is_done(&self) -> bool {
-        self.done
+    /// Set the authentication result
+    pub fn set_result(&mut self, result: AuthResult) {
+        self.result = result;
     }
 
-    /// Get the authentication result
+    /// Get the current authentication result
     pub fn get_result(&self) -> AuthResult {
         self.result
     }
 
-    /// Set fingerprint match result
-    pub fn set_fingerprint_match(&mut self) {
-        self.result = AuthResult::FingerprintMatch;
-        self.done = true;
+    /// Mark authentication as done
+    pub fn mark_done(&self) {
+        self.done.store(true, Ordering::Release);
     }
 
-    /// Set password entered result
-    pub fn set_password_entered(&mut self) {
-        self.result = AuthResult::PasswordEntered;
-        self.done = true;
-    }
-
-    /// Mark authentication as failed
-    pub fn set_failed(&mut self) {
-        self.result = AuthResult::Failed;
-        self.done = true;
+    /// Check if authentication is done
+    pub fn is_done(&self) -> bool {
+        self.done.load(Ordering::Acquire)
     }
 }
 
