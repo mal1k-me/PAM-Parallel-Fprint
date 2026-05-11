@@ -1,87 +1,90 @@
-# PAM Parallel Fprint - Rust Implementation
+# PAM Parallel Fprint
 
-A Linux-PAM module that allows for fingerprint (fprintd) and password authorization in parallel, written in Rust with zero unsafe code and strict compiler settings.
+Caution: This project is a proof of concept implementation created as a learning exercise. It is not production-ready and should not be used in production environments without significant additional testing, security auditing, and hardening.
+
+## Overview
+
+PAM Parallel Fprint is a Linux PAM (Pluggable Authentication Modules) module that enables concurrent fingerprint and password authentication. The module allows users to authenticate using either method - whichever completes first within the configured timeout.
 
 ## Features
 
-- **Parallel Authentication**: Users can authenticate using either fingerprint or password simultaneously
-- **Thread-Safe**: Uses Rust's type system for memory safety and thread-safe synchronization
-- **Timeout Protection**: Global 30-second timeout prevents indefinite hangs
-- **D-Bus Integration**: Communicates with fprintd via system D-Bus
-- **Zero Warnings**: Compiled with strict Rust compiler settings (`#![deny(warnings)]`)
-- **No Unsafe Code**: 100% safe Rust (`#![forbid(unsafe_code)]`)
+- Parallel authentication execution using system threads
+- Support for both fingerprint (via fprintd) and password authentication
+- Configurable authentication timeout (default: 30 seconds)
+- Thread-safe shared state management
+- Pure Rust implementation with minimal dependencies
 
-## Requirements
+## Current Status
 
-- Linux system with PAM
-- fprintd service installed and configured
-- Rust 1.70+
-- libpam-dev headers
-- systemd-devel headers
+This is a proof of concept implementation. The following limitations apply:
 
-## Building
+- Integration with SDDM is not supported due to how SDDM handles PAM authorization
+- Fingerprint authentication is currently a placeholder implementation
+- Password authentication requires integration with the PAM conversation function
+- No production security hardening or extensive testing has been performed
+
+## Project Structure
+
+The project maintains two implementations:
+
+- master branch: Original C implementation
+- rust branch: Modern Rust implementation with improved safety
+
+## Installation (Not Recommended)
+
+If you wish to experiment with this proof of concept:
+
+1. Build the module: `cargo build --release`
+2. The compiled library is located at: `target/release/libpam_parallel_fprint.so`
+3. Review the `add_to_pam` file for PAM configuration guidance
+4. Apply configuration changes to files in `/etc/pam.d/`
+
+## Development
+
+### Requirements
+
+- Rust 1.92.0 or later
+- Linux development headers
+- D-Bus development libraries (for fprintd integration)
+
+### Building
 
 ```bash
+# Debug build
+cargo build
+
+# Release build with optimizations
 cargo build --release
 ```
 
-The compiled PAM module will be located at `target/release/libpam_parallel_fprint.so`
+### Module Components
 
-## Installation
+The Rust implementation consists of:
 
-1. Build the project:
-   ```bash
-   cargo build --release
-   ```
+- `lib.rs`: PAM module entry points and authentication orchestration
+- `auth_data.rs`: Thread-safe shared authentication state
+- `fprint.rs`: Fingerprint authentication handler (placeholder)
+- `password.rs`: Password authentication handler (placeholder)
 
-2. Copy the compiled module to PAM directory:
-   ```bash
-   sudo cp target/release/libpam_parallel_fprint.so /usr/lib/security/
-   ```
+## Security Considerations
 
-3. Add to your PAM configuration file (e.g., `/etc/pam.d/sudo` or `/etc/pam.d/polkit-1`):
-   ```
-   auth    [success=done default=ignore]   pam_parallel_fprint.so
-   auth    required    pam_unix.so try_first_pass
-   ```
+Before using this module in any context:
 
-## How It Works
+- Review the source code for potential security issues
+- Conduct security testing appropriate for your use case
+- Consider the implications of parallel authentication attempts
+- Ensure proper timeout configuration to prevent denial of service
+- Test thoroughly in isolated environments
 
-1. When authentication is requested, the module spawns two concurrent threads:
-   - **Fingerprint Thread**: Connects to fprintd via D-Bus, claims the device, and waits for a fingerprint match
-   - **Password Thread**: Prompts the user for a password
+## Limitations and Future Work
 
-2. Whichever method succeeds first determines the result:
-   - **Fingerprint Match** → Returns `PAM_SUCCESS` (user authenticated)
-   - **Password Entered** → Returns `PAM_IGNORE` (passes to next PAM module, typically `pam_unix.so`)
-   - **Timeout or Failure** → Returns `PAM_AUTH_ERR` (authentication failed)
-
-3. All operations are protected by timeouts:
-   - Global timeout: 30 seconds
-   - Device claim retry: 1 second (max 5 attempts)
-
-## Limitations
-
-- Does not work with SDDM due to its PAM handling approach
-- Best suited for CLI applications like `sudo`, `su`, or `polkit-1`
-- Requires fprintd to be properly configured on your system
-
-## Security Notes
-
-- **No unsafe code**: The module uses only safe Rust constructs
-- **Mutex-protected state**: All shared data is protected by mutexes
-- **Timeout mechanisms**: Prevents indefinite hangs
-- **Error logging**: All authentication failures are logged to syslog
-
-## Troubleshooting
-
-Check syslog for errors:
-```bash
-sudo journalctl -u pam_parallel_fprint -f
-# or
-tail -f /var/log/auth.log | grep pam_parallel_fprint
-```
+- Complete fprintd D-Bus integration
+- PAM conversation function integration for password prompts
+- Support for additional authentication methods
+- Comprehensive test suite
+- Security audit
+- Performance optimization
 
 ## License
 
-GNU General Public License v3.0 - See LICENSE file
+GPL-3.0
