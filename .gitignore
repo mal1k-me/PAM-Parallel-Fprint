@@ -1,5 +1,11 @@
-/build
-/pam-parallel-fprint-1.0.0-1-x86_64.pkg.tar.zst
-/src
-/pkg
-/PAM-Parallel-Fprint
+.gitignore
+/target/
+**/*.rs.bk
+*.pdb
+Cargo.lock
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
