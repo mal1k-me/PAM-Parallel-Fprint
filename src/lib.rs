@@ -4,8 +4,16 @@
 //!
 //! A Linux-PAM module that allows for fingerprint (fprintd) and password authorization in parallel.
 //! Users can authenticate using either a fingerprint match or by entering their password.
+//!
+//! ## Architecture
+//!
+//! The module spawns two concurrent threads:
+//! 1. **Fingerprint Thread**: Connects to fprintd via D-Bus, monitors for fingerprint matches
+//! 2. **Password Thread**: Prompts user via PAM conversation function
+//!
+//! The first to complete sets the authentication result and cancels the other thread.
 
-use std::sync::{Arc, Mutex, atomic::AtomicBool};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::ffi::CStr;
 use libc::{c_int, c_char};
@@ -14,7 +22,7 @@ mod auth_data;
 mod fprint;
 mod password;
 
-pub use auth_data::AuthData;
+pub use auth_data::{AuthData, CancellationToken, PamHandle};
 
 /// Timeout constants
 pub const GLOBAL_TIMEOUT: Duration = Duration::from_secs(30);
@@ -121,6 +129,12 @@ fn flush_terminal() {
 
 /// Main PAM authentication entry point
 ///
+/// This function implements true parallel authentication:
+/// - Spawns fingerprint thread for D-Bus/fprintd communication
+/// - Spawns password thread for PAM conversation prompting
+/// - Waits for either to complete within 30-second timeout
+/// - Returns appropriate PAM code based on which succeeded
+///
 /// # Arguments
 /// * `pamh` - PAM handle
 /// * `flags` - PAM flags
@@ -146,47 +160,51 @@ pub extern "C" fn pam_sm_authenticate(
         None => return PAM_USER_UNKNOWN,
     };
 
-    // Create shared authentication data and cancellation flag
+    // Create shared authentication data and cancellation token
     let auth_data = Arc::new(Mutex::new(AuthData::new()));
-    let should_cancel = Arc::new(AtomicBool::new(false));
+    let cancel_token = CancellationToken::new();
+    let pam_handle = PamHandle::new(pamh);
 
-    // Spawn fingerprint authentication task
+    // Spawn fingerprint authentication thread
     let fp_data = Arc::clone(&auth_data);
-    let fp_cancel = Arc::clone(&should_cancel);
+    let fp_cancel = cancel_token.clone();
     let fp_username = username.clone();
     
     let fp_handle = std::thread::spawn(move || {
-        let _ = fprint::check_fingerprint(&fp_username, &fp_data, &fp_cancel);
+        let _ = fprint::check_fingerprint(&fp_username, fp_data, fp_cancel);
     });
 
-    // Call password check synchronously in main thread to avoid thread safety issues with pamh
+    // Spawn password authentication thread
     let pwd_data = Arc::clone(&auth_data);
-    let pwd_cancel = Arc::clone(&should_cancel);
+    let pwd_cancel = cancel_token.clone();
     let pwd_username = username.clone();
     
-    let _ = password::check_password(&pwd_username, pamh, pwd_data, pwd_cancel);
+    let pwd_handle = std::thread::spawn(move || {
+        let _ = password::check_password(&pwd_username, pam_handle, pwd_data, pwd_cancel);
+    });
 
-    // Wait for fingerprint thread to complete or timeout
+    // Wait for either thread to complete or timeout
     let start = std::time::Instant::now();
     loop {
         if start.elapsed() > GLOBAL_TIMEOUT {
-            should_cancel.store(true, std::sync::atomic::Ordering::Release);
+            cancel_token.cancel();
             break;
         }
 
-        let data = auth_data.lock().unwrap();
-        if data.is_done() {
-            should_cancel.store(true, std::sync::atomic::Ordering::Release);
-            drop(data);
-            break;
+        if let Ok(data) = auth_data.lock() {
+            if data.is_done() {
+                cancel_token.cancel();
+                drop(data);
+                break;
+            }
         }
-        drop(data);
 
         std::thread::sleep(Duration::from_millis(50));
     }
 
-    // Wait for fingerprint thread to complete
+    // Wait for both threads to complete
     let _ = fp_handle.join();
+    let _ = pwd_handle.join();
 
     // Get final authentication result
     let data = auth_data.lock().unwrap();

@@ -6,7 +6,8 @@ use std::ffi::{CStr, CString};
 use libc::c_char;
 use crate::AuthResult;
 use crate::AuthData;
-use std::sync::{Arc, Mutex, atomic::AtomicBool};
+use crate::auth_data::{PamHandle, CancellationToken};
+use std::sync::{Arc, Mutex};
 
 /// PAM conversation item types
 const PAM_PROMPT_ECHO_OFF: i32 = 1;
@@ -46,12 +47,11 @@ const PAM_AUTHTOK: i32 = 6;
 const PAM_SUCCESS: i32 = 0;
 
 /// Check password by prompting the user through PAM conversation
-/// Returns true if password was entered, false if should skip
 pub fn check_password(
     _username: &str,
-    pamh: *const std::ffi::c_void,
+    pamh: PamHandle,
     auth_data: Arc<Mutex<AuthData>>,
-    should_cancel: Arc<AtomicBool>,
+    cancel_token: CancellationToken,
 ) -> Result<(), String> {
     // Check if fingerprint already succeeded
     {
@@ -64,7 +64,7 @@ pub fn check_password(
     // Get the PAM conversation function
     let conv_ptr = unsafe {
         let mut conv_ptr: *const std::ffi::c_void = std::ptr::null();
-        let ret = pam_get_item(pamh, PAM_CONV, &mut conv_ptr as *mut _);
+        let ret = pam_get_item(pamh.as_ptr(), PAM_CONV, &mut conv_ptr as *mut _);
         if ret != PAM_SUCCESS || conv_ptr.is_null() {
             return Err("Failed to get PAM conversation function".to_string());
         }
@@ -109,7 +109,7 @@ pub fn check_password(
 
             // Set the password in PAM
             pam_set_item(
-                pamh,
+                pamh.as_ptr(),
                 PAM_AUTHTOK,
                 password_cstring.as_ptr() as *const std::ffi::c_void,
             );
@@ -118,7 +118,7 @@ pub fn check_password(
             if let Ok(mut data) = auth_data.lock() {
                 data.set_result(AuthResult::PasswordEntered);
                 data.mark_done();
-                should_cancel.store(true, std::sync::atomic::Ordering::Release);
+                cancel_token.cancel();
             }
         }
     }

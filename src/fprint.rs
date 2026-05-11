@@ -2,10 +2,10 @@
 //!
 //! Handles fingerprint verification through fprintd D-Bus service.
 
-use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::thread;
-use crate::auth_data::AuthData;
+use crate::auth_data::{AuthData, CancellationToken};
 
 const MAX_RETRIES: usize = 3;
 const RETRY_DELAY: Duration = Duration::from_secs(1);
@@ -14,20 +14,20 @@ const FINGERPRINT_TIMEOUT: Duration = Duration::from_secs(30);
 /// Check fingerprint authentication via D-Bus/fprintd
 pub fn check_fingerprint(
     username: &str,
-    auth_data: &Arc<Mutex<AuthData>>,
-    should_cancel: &Arc<AtomicBool>,
+    auth_data: Arc<Mutex<AuthData>>,
+    cancel_token: CancellationToken,
 ) -> Result<(), String> {
     // Check if we should cancel
-    if should_cancel.load(Ordering::Acquire) {
+    if cancel_token.is_cancelled() {
         return Ok(());
     }
 
     // Attempt D-Bus connection
-    let result = attempt_dbus_fingerprint(username, auth_data, should_cancel);
+    let result = attempt_dbus_fingerprint(username, auth_data.clone(), cancel_token.clone());
     
     // If D-Bus fails, just poll until timeout
     if result.is_err() {
-        poll_for_completion(auth_data, should_cancel);
+        poll_for_completion(auth_data, cancel_token);
     }
     
     Ok(())
@@ -36,8 +36,8 @@ pub fn check_fingerprint(
 /// Attempt to use D-Bus/fprintd for fingerprint authentication
 fn attempt_dbus_fingerprint(
     username: &str,
-    auth_data: &Arc<Mutex<AuthData>>,
-    should_cancel: &Arc<AtomicBool>,
+    auth_data: Arc<Mutex<AuthData>>,
+    cancel_token: CancellationToken,
 ) -> Result<(), String> {
     // Try to connect to system D-Bus
     use zbus::blocking::Connection;
@@ -51,7 +51,7 @@ fn attempt_dbus_fingerprint(
     // Claim device with retries
     let mut retries = 0;
     loop {
-        if should_cancel.load(Ordering::Acquire) {
+        if cancel_token.is_cancelled() {
             return Ok(());
         }
 
@@ -69,7 +69,7 @@ fn attempt_dbus_fingerprint(
     start_verification(&conn, &device_path)?;
 
     // Wait for fingerprint match
-    wait_for_match(&conn, &device_path, auth_data, should_cancel)?;
+    wait_for_match(&conn, &device_path, auth_data, cancel_token)?;
 
     // Release device
     let _ = release_device(&conn, &device_path);
@@ -143,14 +143,14 @@ fn start_verification(
 fn wait_for_match(
     _conn: &zbus::blocking::Connection,
     _device_path: &zbus::zvariant::OwnedObjectPath,
-    auth_data: &Arc<Mutex<AuthData>>,
-    should_cancel: &Arc<AtomicBool>,
+    auth_data: Arc<Mutex<AuthData>>,
+    cancel_token: CancellationToken,
 ) -> Result<(), String> {
     // Poll for completion with timeout
     let start = std::time::Instant::now();
     
     while start.elapsed() < FINGERPRINT_TIMEOUT {
-        if should_cancel.load(Ordering::Acquire) {
+        if cancel_token.is_cancelled() {
             return Ok(());
         }
 
@@ -185,13 +185,13 @@ fn release_device(
 
 /// Poll for authentication completion
 fn poll_for_completion(
-    auth_data: &Arc<Mutex<AuthData>>,
-    should_cancel: &Arc<AtomicBool>,
+    auth_data: Arc<Mutex<AuthData>>,
+    cancel_token: CancellationToken,
 ) {
     let start = std::time::Instant::now();
     
     while start.elapsed() < FINGERPRINT_TIMEOUT {
-        if should_cancel.load(Ordering::Acquire) {
+        if cancel_token.is_cancelled() {
             return;
         }
 
