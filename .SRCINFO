@@ -1,15 +1,17 @@
 pkgbase = pam-parallel-fprint
-	pkgdesc = PAM module that allows for fingerprint and password auth at the same time
+	pkgdesc = A Linux-PAM module that allows for fingerprint (fprintd) and password authorization in parallel
 	pkgver = 1.0.0
 	pkgrel = 1
-	url = https://github.com/SelimCifci/PAM-Parallel-Fprint
+	url = https://github.com/mal1k-me/PAM-Parallel-Fprint
 	arch = x86_64
+	arch = aarch64
 	license = GPL3
-	makedepends = git
-	makedepends = cmake
+	makedepends = rust
+	makedepends = cargo
 	depends = pam
-	depends = fprintd
-	source = git+https://github.com/SelimCifci/PAM-Parallel-Fprint.git
+	depends = systemd
+	depends = libfprint
+	source = pam-parallel-fprint-1.0.0.tar.gz::https://github.com/mal1k-me/PAM-Parallel-Fprint/archive/v1.0.0.tar.gz
 	sha256sums = SKIP
 
 pkgname = pam-parallel-fprint
