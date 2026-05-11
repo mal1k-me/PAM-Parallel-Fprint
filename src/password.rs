@@ -4,7 +4,6 @@
 
 use std::sync::{Arc, Mutex};
 use crate::auth_data::AuthData;
-use crate::AuthResult;
 
 /// Check password by prompting the user
 pub fn check_password(
