@@ -1,6 +1,7 @@
 # PAM Parallel Fprint
 
-Caution: This project is a proof of concept implementation created as a learning exercise. It is not production-ready and should not be used in production environments without significant additional testing, security auditing, and hardening.
+> [!CAUTION]
+> This project is a proof of concept implementation created as a learning exercise. It is not production-ready and should not be used in production environments without significant additional testing, security auditing, and hardening.
 
 ## Overview
 
