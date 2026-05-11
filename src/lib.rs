@@ -56,7 +56,6 @@ const PAM_IGNORE: c_int = 25;
 // C extern functions for PAM
 extern "C" {
     /// Get user from PAM handle
-    #[allow(unsafe_code)]
     pub fn pam_get_user(
         pamh: *const std::ffi::c_void,
         user: *mut *const c_char,
@@ -65,8 +64,11 @@ extern "C" {
 }
 
 /// Helper function to get username from PAM handle
-#[allow(unsafe_code)]
 fn get_pam_user(pamh: *const std::ffi::c_void) -> Option<String> {
+    // SAFETY: This is safe because we're calling a well-defined C FFI function
+    // with valid pointers. The PAM library guarantees user_ptr will be valid
+    // if the call succeeds.
+    #[allow(unsafe_code)]
     unsafe {
         let mut user_ptr: *const c_char = std::ptr::null();
         let ret = pam_get_user(pamh, &mut user_ptr as *mut _, std::ptr::null());
@@ -95,7 +97,6 @@ fn get_pam_user(pamh: *const std::ffi::c_void) -> Option<String> {
 /// * `PAM_IGNORE` - Password entered, pass to next module
 /// * `PAM_AUTH_ERR` - Authentication failed or timeout
 #[no_mangle]
-#[allow(unsafe_code)]
 pub extern "C" fn pam_sm_authenticate(
     pamh: *const std::ffi::c_void,
     _flags: c_int,
@@ -159,7 +160,6 @@ pub extern "C" fn pam_sm_authenticate(
 
 /// Set credentials PAM function (required stub)
 #[no_mangle]
-#[allow(unsafe_code)]
 pub extern "C" fn pam_sm_setcred(
     _pamh: *const std::ffi::c_void,
     _flags: c_int,
@@ -171,7 +171,6 @@ pub extern "C" fn pam_sm_setcred(
 
 /// Account management PAM function (required stub)
 #[no_mangle]
-#[allow(unsafe_code)]
 pub extern "C" fn pam_sm_acct_mgmt(
     _pamh: *const std::ffi::c_void,
     _flags: c_int,
