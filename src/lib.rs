@@ -5,7 +5,7 @@
 //! A Linux-PAM module that allows for fingerprint (fprintd) and password authorization in parallel.
 //! Users can authenticate using either a fingerprint match or by entering their password.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, atomic::AtomicBool};
 use std::time::Duration;
 use std::ffi::CStr;
 use libc::{c_int, c_char};
@@ -146,35 +146,39 @@ pub extern "C" fn pam_sm_authenticate(
         None => return PAM_USER_UNKNOWN,
     };
 
-    // Create shared authentication data
+    // Create shared authentication data and cancellation flag
     let auth_data = Arc::new(Mutex::new(AuthData::new()));
+    let should_cancel = Arc::new(AtomicBool::new(false));
 
     // Spawn fingerprint authentication task
     let fp_data = Arc::clone(&auth_data);
+    let fp_cancel = Arc::clone(&should_cancel);
     let fp_username = username.clone();
     
     let fp_handle = std::thread::spawn(move || {
-        let _ = fprint::check_fingerprint(&fp_username, &fp_data);
+        let _ = fprint::check_fingerprint(&fp_username, &fp_data, &fp_cancel);
     });
 
     // Spawn password authentication task
-    // Note: We need to be careful with pamh - it cannot be moved across threads
-    // For password authentication to work, it must be called in the main PAM context
     let pwd_data = Arc::clone(&auth_data);
+    let pwd_cancel = Arc::clone(&should_cancel);
     let pwd_username = username.clone();
     
-    // Call password check synchronously to avoid thread safety issues with pamh
-    let _ = password::check_password(&pwd_username, pamh, pwd_data);
+    let pwd_handle = std::thread::spawn(move || {
+        let _ = password::check_password(&pwd_username, pamh, pwd_data, pwd_cancel);
+    });
 
-    // Wait for fingerprint thread to complete or timeout
+    // Wait for either thread to complete or timeout
     let start = std::time::Instant::now();
     loop {
         if start.elapsed() > GLOBAL_TIMEOUT {
+            should_cancel.store(true, std::sync::atomic::Ordering::Release);
             break;
         }
 
         let data = auth_data.lock().unwrap();
         if data.is_done() {
+            should_cancel.store(true, std::sync::atomic::Ordering::Release);
             drop(data);
             break;
         }
@@ -183,8 +187,9 @@ pub extern "C" fn pam_sm_authenticate(
         std::thread::sleep(Duration::from_millis(50));
     }
 
-    // Wait for fingerprint thread to complete
+    // Wait for threads to complete
     let _ = fp_handle.join();
+    let _ = pwd_handle.join();
 
     // Get final authentication result
     let data = auth_data.lock().unwrap();

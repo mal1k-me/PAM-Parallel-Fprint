@@ -6,7 +6,7 @@ use std::ffi::{CStr, CString};
 use libc::c_char;
 use crate::AuthResult;
 use crate::AuthData;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, atomic::AtomicBool};
 
 /// PAM conversation item types
 const PAM_PROMPT_ECHO_OFF: i32 = 1;
@@ -46,10 +46,12 @@ const PAM_AUTHTOK: i32 = 6;
 const PAM_SUCCESS: i32 = 0;
 
 /// Check password by prompting the user through PAM conversation
+/// Returns true if password was entered, false if should skip
 pub fn check_password(
     _username: &str,
     pamh: *const std::ffi::c_void,
     auth_data: Arc<Mutex<AuthData>>,
+    should_cancel: Arc<AtomicBool>,
 ) -> Result<(), String> {
     // Check if fingerprint already succeeded
     {
@@ -116,6 +118,7 @@ pub fn check_password(
             if let Ok(mut data) = auth_data.lock() {
                 data.set_result(AuthResult::PasswordEntered);
                 data.mark_done();
+                should_cancel.store(true, std::sync::atomic::Ordering::Release);
             }
         }
     }
