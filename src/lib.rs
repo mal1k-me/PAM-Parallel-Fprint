@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex, atomic::AtomicBool};
 use std::time::Duration;
 use std::ffi::CStr;
 use libc::{c_int, c_char};
+use std::sync::mpsc;
 
 mod auth_data;
 mod fprint;
@@ -149,6 +150,7 @@ pub extern "C" fn pam_sm_authenticate(
     // Create shared authentication data and cancellation flag
     let auth_data = Arc::new(Mutex::new(AuthData::new()));
     let should_cancel = Arc::new(AtomicBool::new(false));
+    let (tx, rx) = mpsc::channel();
 
     // Spawn fingerprint authentication task
     let fp_data = Arc::clone(&auth_data);
@@ -159,16 +161,16 @@ pub extern "C" fn pam_sm_authenticate(
         let _ = fprint::check_fingerprint(&fp_username, &fp_data, &fp_cancel);
     });
 
-    // Spawn password authentication task
+    // Call password check synchronously in main thread to avoid thread safety issues with pamh
     let pwd_data = Arc::clone(&auth_data);
     let pwd_cancel = Arc::clone(&should_cancel);
     let pwd_username = username.clone();
+    let pwd_tx = tx.clone();
     
-    let pwd_handle = std::thread::spawn(move || {
-        let _ = password::check_password(&pwd_username, pamh, pwd_data, pwd_cancel);
-    });
+    let _ = password::check_password(&pwd_username, pamh, pwd_data, pwd_cancel);
+    let _ = pwd_tx.send(());
 
-    // Wait for either thread to complete or timeout
+    // Wait for fingerprint thread to complete or timeout
     let start = std::time::Instant::now();
     loop {
         if start.elapsed() > GLOBAL_TIMEOUT {
@@ -187,9 +189,8 @@ pub extern "C" fn pam_sm_authenticate(
         std::thread::sleep(Duration::from_millis(50));
     }
 
-    // Wait for threads to complete
+    // Wait for fingerprint thread to complete
     let _ = fp_handle.join();
-    let _ = pwd_handle.join();
 
     // Get final authentication result
     let data = auth_data.lock().unwrap();

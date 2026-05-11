@@ -6,7 +6,6 @@ use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
 use std::time::Duration;
 use std::thread;
 use crate::auth_data::AuthData;
-use crate::AuthResult;
 
 const MAX_RETRIES: usize = 3;
 const RETRY_DELAY: Duration = Duration::from_secs(1);
@@ -42,7 +41,7 @@ fn attempt_dbus_fingerprint(
 ) -> Result<(), String> {
     // Try to connect to system D-Bus
     use zbus::blocking::Connection;
-    use zbus::zvariant::{ObjectPath, OwnedObjectPath};
+    use zbus::zvariant::OwnedObjectPath;
 
     let conn = Connection::system()
         .map_err(|_| "D-Bus not available".to_string())?;
@@ -81,9 +80,7 @@ fn attempt_dbus_fingerprint(
 
 /// Get default fingerprint device from fprintd
 fn get_default_device(conn: &zbus::blocking::Connection) -> Result<zbus::zvariant::OwnedObjectPath, String> {
-    use zbus::zvariant::ObjectPath;
-
-    let path: ObjectPath = conn
+    let reply = conn
         .call_method(
             Some("net.reactivated.Fprint"),
             "/net/reactivated/Fprint/Manager",
@@ -91,8 +88,10 @@ fn get_default_device(conn: &zbus::blocking::Connection) -> Result<zbus::zvarian
             "GetDefaultDevice",
             &(),
         )
-        .map_err(|e| format!("GetDefaultDevice failed: {}", e))?
-        .body()
+        .map_err(|e| format!("GetDefaultDevice failed: {}", e))?;
+
+    let body = reply.body();
+    let path: zbus::zvariant::ObjectPath = body
         .deserialize()
         .map_err(|e| format!("Failed to parse device path: {}", e))?;
 
@@ -105,11 +104,9 @@ fn claim_device(
     device_path: &zbus::zvariant::OwnedObjectPath,
     username: &str,
 ) -> Result<(), String> {
-    let path_ref: &zbus::zvariant::ObjectPath = device_path.as_ref();
-    
     conn.call_method(
         Some("net.reactivated.Fprint"),
-        path_ref,
+        device_path,
         Some("net.reactivated.Fprint.Device"),
         "Claim",
         &(username,),
@@ -131,11 +128,9 @@ fn start_verification(
     conn: &zbus::blocking::Connection,
     device_path: &zbus::zvariant::OwnedObjectPath,
 ) -> Result<(), String> {
-    let path_ref: &zbus::zvariant::ObjectPath = device_path.as_ref();
-    
     conn.call_method(
         Some("net.reactivated.Fprint"),
-        path_ref,
+        device_path,
         Some("net.reactivated.Fprint.Device"),
         "VerifyStart",
         &("any",),
@@ -177,11 +172,9 @@ fn release_device(
     conn: &zbus::blocking::Connection,
     device_path: &zbus::zvariant::OwnedObjectPath,
 ) -> Result<(), String> {
-    let path_ref: &zbus::zvariant::ObjectPath = device_path.as_ref();
-    
     conn.call_method(
         Some("net.reactivated.Fprint"),
-        path_ref,
+        device_path,
         Some("net.reactivated.Fprint.Device"),
         "Release",
         &(),
