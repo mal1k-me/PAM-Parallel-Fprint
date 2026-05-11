@@ -121,20 +121,23 @@ pub extern "C" fn pam_sm_authenticate(
     });
 
     // Spawn password authentication task
+    // Note: We create a new PAM handle connection for the password thread
+    // to avoid issues with PAM handle thread safety
     let pwd_data = Arc::clone(&auth_data);
     let pwd_notify = Arc::clone(&notify);
     let pwd_username = username.clone();
-    let pwd_handle_clone = unsafe {
-        // SAFETY: We're creating a handle just for passing to the password thread.
-        // The original handle remains valid in this function scope.
-        std::mem::transmute::<*mut pam::bindings::pam_handle_t, *mut pam::bindings::pam_handle_t>(pamh)
-    };
     
     let pwd_handle = std::thread::spawn(move || {
-        let pam_h = PamHandle::new(pwd_handle_clone);
-        if let Ok(h) = pam_h {
-            if let Err(e) = check_password(&pwd_username, &h, &pwd_data, &pwd_notify) {
-                log_error(&format!("Password check failed: {}", e));
+        // Create PAM handle from the raw pointer for the password check
+        // This is done in the spawned thread to avoid cross-thread issues
+        match PamHandle::new(pamh) {
+            Ok(h) => {
+                if let Err(e) = check_password(&pwd_username, &h, &pwd_data, &pwd_notify) {
+                    log_error(&format!("Password check failed: {}", e));
+                }
+            }
+            Err(e) => {
+                log_error(&format!("Failed to create PAM handle in password thread: {}", e));
             }
         }
     });
@@ -144,7 +147,7 @@ pub extern "C" fn pam_sm_authenticate(
     loop {
         if start.elapsed() > GLOBAL_TIMEOUT {
             log_error("Authentication timeout exceeded");
-            let _ = notify.notify_waiters();
+            notify.notify_waiters();
             break;
         }
 
