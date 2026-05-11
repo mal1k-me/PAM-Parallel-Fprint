@@ -7,24 +7,19 @@
 //! A Linux-PAM module that allows for fingerprint (fprintd) and password authorization in parallel.
 //! Users can authenticate using either a fingerprint match or by entering their password.
 
-use pam::module::{PamHandle, PamError};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::sync::Notify;
-use thiserror::Error;
+use std::ffi::CStr;
+use libc::{c_int, c_char};
 
+mod auth_data;
 mod fprint;
 mod password;
-mod auth_data;
-mod logging;
 
 pub use auth_data::AuthData;
-pub use fprint::check_fingerprint;
-pub use password::check_password;
-pub use logging::init_logging;
 
-/// Result type for PAM operations
-pub type PamResult<T> = Result<T, PamError>;
+/// Timeout constants
+pub const GLOBAL_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Authentication result variants
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,38 +32,57 @@ pub enum AuthResult {
     Failed,
 }
 
-/// Custom error types for authentication module
-#[derive(Debug, Error)]
-pub enum AuthError {
-    /// D-Bus communication error
-    #[error("D-Bus error: {0}")]
-    DBusError(String),
-    
-    /// Fingerprint device error
-    #[error("Fingerprint device error: {0}")]
-    DeviceError(String),
-    
-    /// Timeout during authentication
-    #[error("Authentication timeout")]
-    Timeout,
-    
-    /// Thread communication error
-    #[error("Thread communication error: {0}")]
-    ThreadError(String),
-    
-    /// PAM error
-    #[error("PAM error: {0}")]
-    PamError(String),
+/// PAM error codes
+const PAM_SUCCESS: c_int = 0;
+const PAM_OPEN_ERR: c_int = 1;
+const PAM_SYMBOL_ERR: c_int = 2;
+const PAM_SERVICE_ERR: c_int = 3;
+const PAM_SYSTEM_ERR: c_int = 4;
+const PAM_BUF_ERR: c_int = 5;
+const PAM_PERM_DENIED: c_int = 6;
+const PAM_AUTH_ERR: c_int = 7;
+const PAM_CRED_INSUFFICIENT: c_int = 8;
+const PAM_AUTHINFO_UNAVAIL: c_int = 9;
+const PAM_USER_UNKNOWN: c_int = 10;
+const PAM_MAXTRIES: c_int = 11;
+const PAM_NEW_AUTHTOK_REQD: c_int = 12;
+const PAM_ACCT_EXPIRED: c_int = 13;
+const PAM_SESSION_ERR: c_int = 14;
+const PAM_CRED_UNAVAIL: c_int = 15;
+const PAM_CRED_EXPIRED: c_int = 16;
+const PAM_CRED_ERR: c_int = 17;
+const PAM_NO_MODULE_DATA: c_int = 18;
+const PAM_IGNORE: c_int = 25;
+
+/// C extern functions for PAM
+extern "C" {
+    /// Get user from PAM handle
+    pub fn pam_get_user(
+        pamh: *const std::ffi::c_void,
+        user: *mut *const c_char,
+        prompt: *const c_char,
+    ) -> c_int;
 }
 
-/// Timeout constants
-pub const GLOBAL_TIMEOUT: Duration = Duration::from_secs(30);
-pub const DEVICE_CLAIM_RETRY_TIMEOUT: Duration = Duration::from_millis(1000);
-pub const MAX_DEVICE_CLAIM_RETRIES: u32 = 5;
-pub const DBUS_WAIT_TIMEOUT: Duration = Duration::from_millis(100);
+/// Helper function to get username from PAM handle
+fn get_pam_user(pamh: *const std::ffi::c_void) -> Option<String> {
+    unsafe {
+        let mut user_ptr: *const c_char = std::ptr::null();
+        let ret = pam_get_user(pamh, &mut user_ptr as *mut _, std::ptr::null());
+        
+        if ret == PAM_SUCCESS && !user_ptr.is_null() {
+            CStr::from_ptr(user_ptr)
+                .to_str()
+                .ok()
+                .map(|s| s.to_string())
+        } else {
+            None
+        }
+    }
+}
 
 /// Main PAM authentication entry point
-/// 
+///
 /// # Arguments
 /// * `pamh` - PAM handle
 /// * `flags` - PAM flags
@@ -81,73 +95,40 @@ pub const DBUS_WAIT_TIMEOUT: Duration = Duration::from_millis(100);
 /// * `PAM_AUTH_ERR` - Authentication failed or timeout
 #[no_mangle]
 pub extern "C" fn pam_sm_authenticate(
-    pamh: *mut pam::bindings::pam_handle_t,
-    flags: pam::bindings::c_int,
-    _argc: pam::bindings::c_int,
-    _argv: *const *const pam::bindings::c_char,
-) -> pam::bindings::c_int {
-    init_logging();
-    
-    let handle = match PamHandle::new(pamh) {
-        Ok(h) => h,
-        Err(e) => {
-            log_error(&format!("Failed to create PAM handle: {}", e));
-            return PamError::User as pam::bindings::c_int;
-        }
-    };
-
+    pamh: *const std::ffi::c_void,
+    _flags: c_int,
+    _argc: c_int,
+    _argv: *const *const c_char,
+) -> c_int {
     // Get username
-    let username = match handle.get_user(None) {
-        Ok(u) => u.to_string(),
-        Err(e) => {
-            log_error(&format!("Failed to get username: {}", e));
-            return PamError::User as pam::bindings::c_int;
-        }
+    let username = match get_pam_user(pamh) {
+        Some(u) => u,
+        None => return PAM_USER_UNKNOWN,
     };
 
     // Create shared authentication data
     let auth_data = Arc::new(Mutex::new(AuthData::new()));
-    let notify = Arc::new(Notify::new());
 
     // Spawn fingerprint authentication task
     let fp_data = Arc::clone(&auth_data);
-    let fp_notify = Arc::clone(&notify);
     let fp_username = username.clone();
     
     let fp_handle = std::thread::spawn(move || {
-        if let Err(e) = check_fingerprint(&fp_username, &fp_data, &fp_notify) {
-            log_error(&format!("Fingerprint check failed: {}", e));
-        }
+        let _ = fprint::check_fingerprint(&fp_username, &fp_data);
     });
 
     // Spawn password authentication task
-    // Note: We create a new PAM handle connection for the password thread
-    // to avoid issues with PAM handle thread safety
     let pwd_data = Arc::clone(&auth_data);
-    let pwd_notify = Arc::clone(&notify);
     let pwd_username = username.clone();
     
     let pwd_handle = std::thread::spawn(move || {
-        // Create PAM handle from the raw pointer for the password check
-        // This is done in the spawned thread to avoid cross-thread issues
-        match PamHandle::new(pamh) {
-            Ok(h) => {
-                if let Err(e) = check_password(&pwd_username, &h, &pwd_data, &pwd_notify) {
-                    log_error(&format!("Password check failed: {}", e));
-                }
-            }
-            Err(e) => {
-                log_error(&format!("Failed to create PAM handle in password thread: {}", e));
-            }
-        }
+        let _ = password::check_password(&pwd_username, &pwd_data);
     });
 
     // Wait for either thread to complete or timeout
     let start = std::time::Instant::now();
     loop {
         if start.elapsed() > GLOBAL_TIMEOUT {
-            log_error("Authentication timeout exceeded");
-            notify.notify_waiters();
             break;
         }
 
@@ -161,61 +142,37 @@ pub extern "C" fn pam_sm_authenticate(
         std::thread::sleep(Duration::from_millis(50));
     }
 
-    // Signal threads to shutdown
-    notify.notify_waiters();
-
-    // Wait for threads to complete
+    // Wait for threads to complete with timeout
     let _ = fp_handle.join();
     let _ = pwd_handle.join();
 
     // Get final authentication result
     let data = auth_data.lock().unwrap();
-    let result = match data.get_result() {
-        AuthResult::FingerprintMatch => {
-            log_info("Authentication successful via fingerprint");
-            PamError::Success as pam::bindings::c_int
-        }
-        AuthResult::PasswordEntered => {
-            log_info("Password entered, passing to next module");
-            PamError::Ignore as pam::bindings::c_int
-        }
-        AuthResult::Failed => {
-            log_error("Authentication failed");
-            PamError::Auth as pam::bindings::c_int
-        }
-    };
-
-    result
+    match data.get_result() {
+        AuthResult::FingerprintMatch => PAM_SUCCESS,
+        AuthResult::PasswordEntered => PAM_IGNORE,
+        AuthResult::Failed => PAM_AUTH_ERR,
+    }
 }
 
 /// Set credentials PAM function (required stub)
 #[no_mangle]
 pub extern "C" fn pam_sm_setcred(
-    _pamh: *mut pam::bindings::pam_handle_t,
-    _flags: pam::bindings::c_int,
-    _argc: pam::bindings::c_int,
-    _argv: *const *const pam::bindings::c_char,
-) -> pam::bindings::c_int {
-    PamError::Success as pam::bindings::c_int
+    _pamh: *const std::ffi::c_void,
+    _flags: c_int,
+    _argc: c_int,
+    _argv: *const *const c_char,
+) -> c_int {
+    PAM_SUCCESS
 }
 
 /// Account management PAM function (required stub)
 #[no_mangle]
 pub extern "C" fn pam_sm_acct_mgmt(
-    _pamh: *mut pam::bindings::pam_handle_t,
-    _flags: pam::bindings::c_int,
-    _argc: pam::bindings::c_int,
-    _argv: *const *const pam::bindings::c_char,
-) -> pam::bindings::c_int {
-    PamError::Success as pam::bindings::c_int
-}
-
-/// Log info level message
-fn log_info(msg: &str) {
-    logging::log(syslog::Facility::AuthPriv.to_string(), syslog::Severity::Informational, msg);
-}
-
-/// Log error level message
-fn log_error(msg: &str) {
-    logging::log(syslog::Facility::AuthPriv.to_string(), syslog::Severity::Error, msg);
+    _pamh: *const std::ffi::c_void,
+    _flags: c_int,
+    _argc: c_int,
+    _argv: *const *const c_char,
+) -> c_int {
+    PAM_SUCCESS
 }
