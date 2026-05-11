@@ -158,20 +158,15 @@ pub extern "C" fn pam_sm_authenticate(
     });
 
     // Spawn password authentication task
+    // Note: We need to be careful with pamh - it cannot be moved across threads
+    // For password authentication to work, it must be called in the main PAM context
     let pwd_data = Arc::clone(&auth_data);
     let pwd_username = username.clone();
     
-    // Note: pamh cannot be shared across threads safely, so password auth
-    // must complete before we return from this function
-    let pwd_handle = {
-        // Create a scope to drop pamh references before spawning
-        let data_clone = pwd_data.clone();
-        std::thread::spawn(move || {
-            let _ = password::check_password(&pwd_username, pamh, data_clone);
-        })
-    };
+    // Call password check synchronously to avoid thread safety issues with pamh
+    let _ = password::check_password(&pwd_username, pamh, pwd_data);
 
-    // Wait for either thread to complete or timeout
+    // Wait for fingerprint thread to complete or timeout
     let start = std::time::Instant::now();
     loop {
         if start.elapsed() > GLOBAL_TIMEOUT {
@@ -188,9 +183,8 @@ pub extern "C" fn pam_sm_authenticate(
         std::thread::sleep(Duration::from_millis(50));
     }
 
-    // Wait for threads to complete
+    // Wait for fingerprint thread to complete
     let _ = fp_handle.join();
-    let _ = pwd_handle.join();
 
     // Get final authentication result
     let data = auth_data.lock().unwrap();
