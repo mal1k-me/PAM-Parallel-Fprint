@@ -1,22 +1,24 @@
 pkgname=pam-parallel-fprint
 pkgver=1.0.0
 pkgrel=1
-pkgdesc="PAM module that allows for fingerprint and password auth at the same time"
-arch=('x86_64')
-url="https://github.com/SelimCifci/PAM-Parallel-Fprint"
+pkgdesc="A Linux-PAM module that allows for fingerprint (fprintd) and password authorization in parallel"
+arch=('x86_64' 'aarch64')
+url="https://github.com/mal1k-me/PAM-Parallel-Fprint"
 license=('GPL3')
-depends=('pam' 'fprintd')
-makedepends=('git' 'cmake')
-source=("git+https://github.com/SelimCifci/PAM-Parallel-Fprint.git")
+depends=('pam' 'systemd' 'libfprint')
+makedepends=('rust' 'cargo')
+source=("${pkgname}-${pkgver}.tar.gz::https://github.com/mal1k-me/PAM-Parallel-Fprint/archive/v${pkgver}.tar.gz")
 sha256sums=('SKIP')
 
 build() {
-  cd "${srcdir}/PAM-Parallel-Fprint"
-  cmake -S . -B build
-  cmake --build build
+  cd "${srcdir}/PAM-Parallel-Fprint-${pkgver}"
+  cargo build --release
 }
 
 package() {
-  mkdir -p "${pkgdir}/usr/lib/security/"
-  cp "${srcdir}/PAM-Parallel-Fprint/build/pam_parallel_fprint.so" "${pkgdir}/usr/lib/security/"
+  cd "${srcdir}/PAM-Parallel-Fprint-${pkgver}"
+  install -Dm755 target/release/pam_parallel_fprint.so "${pkgdir}/usr/lib/security/pam_parallel_fprint.so"
+  install -Dm644 README.md "${pkgdir}/usr/share/doc/${pkgname}/README.md"
+  install -Dm644 add_to_pam "${pkgdir}/usr/share/doc/${pkgname}/add_to_pam"
+  install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
 }
