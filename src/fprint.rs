@@ -6,15 +6,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::thread;
 use crate::auth_data::AuthData;
-use crate::AuthResult;
 
-const MAX_RETRIES: usize = 3;
-const RETRY_DELAY: Duration = Duration::from_secs(1);
 const FINGERPRINT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Check fingerprint authentication
 pub fn check_fingerprint(
-    username: &str,
+    _username: &str,
     auth_data: &Arc<Mutex<AuthData>>,
 ) -> Result<(), String> {
     // Note: Full D-Bus integration with fprintd would go here.
