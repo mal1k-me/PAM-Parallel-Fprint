@@ -2,10 +2,8 @@
 //!
 //! Handles password input and verification through PAM's conversation function.
 
-use std::sync::{Arc, Mutex};
 use std::ffi::{CStr, CString};
 use libc::c_char;
-use crate::auth_data::AuthData;
 use crate::AuthResult;
 
 /// PAM conversation item types
@@ -25,14 +23,6 @@ pub struct PamMessage {
     pub msg: *const c_char,
 }
 
-/// PAM conversation function type
-pub type PamConv = extern "C" fn(
-    num_msg: i32,
-    msg: *const *const PamMessage,
-    resp: *mut *mut PamResponse,
-    appdata_ptr: *mut std::ffi::c_void,
-) -> i32;
-
 extern "C" {
     /// Set PAM item
     pub fn pam_set_item(
@@ -41,7 +31,7 @@ extern "C" {
         item: *const std::ffi::c_void,
     ) -> i32;
 
-    /// Get PAM conversation function
+    /// Get PAM item
     pub fn pam_get_item(
         pamh: *const std::ffi::c_void,
         item_type: i32,
@@ -57,13 +47,14 @@ const PAM_SUCCESS: i32 = 0;
 pub fn check_password(
     _username: &str,
     pamh: *const std::ffi::c_void,
-    auth_data: &Arc<Mutex<AuthData>>,
+    auth_data_ptr: *mut std::ffi::c_void,
 ) -> Result<(), String> {
     // Check if fingerprint already succeeded
-    {
-        let data = auth_data.lock().map_err(|e| format!("Lock error: {}", e))?;
-        if data.is_done() {
-            return Ok(());
+    unsafe {
+        if let Some(auth_data) = (auth_data_ptr as *const crate::auth_data::AuthData).as_ref() {
+            if auth_data.is_done() {
+                return Ok(());
+            }
         }
     }
 
@@ -83,7 +74,15 @@ pub fn check_password(
 
     // Call conversation function
     unsafe {
-        let conv_fn: PamConv = std::mem::transmute(conv_ptr);
+        // Define conversation function type
+        type PamConvFn = extern "C" fn(
+            num_msg: i32,
+            msg: *const *const PamMessage,
+            resp: *mut *mut PamResponse,
+            appdata_ptr: *mut std::ffi::c_void,
+        ) -> i32;
+
+        let conv_fn: PamConvFn = std::mem::transmute(conv_ptr);
 
         // Prepare message
         let msg = PamMessage {
@@ -113,9 +112,9 @@ pub fn check_password(
             );
 
             // Mark as password entered
-            if let Ok(mut data) = auth_data.lock() {
-                data.set_result(AuthResult::PasswordEntered);
-                data.mark_done();
+            if let Some(auth_data) = (auth_data_ptr as *mut crate::auth_data::AuthData).as_mut() {
+                auth_data.set_result(AuthResult::PasswordEntered);
+                auth_data.mark_done();
             }
         }
     }

@@ -8,7 +8,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::ffi::CStr;
-use libc::{c_int, c_char, isatty};
+use libc::{c_int, c_char};
 
 mod auth_data;
 mod fprint;
@@ -76,7 +76,16 @@ extern "C" {
         user: *mut *const c_char,
         prompt: *const c_char,
     ) -> c_int;
+
+    /// Check if file descriptor is a terminal
+    pub fn isatty(fd: c_int) -> c_int;
+
+    /// Flush terminal input
+    pub fn tcflush(fd: c_int, queue_selector: c_int) -> c_int;
 }
+
+const TCIFLUSH: c_int = 0;
+const STDIN_FILENO: c_int = 0;
 
 /// Helper function to get username from PAM handle
 fn get_pam_user(pamh: *const std::ffi::c_void) -> Option<String> {
@@ -100,23 +109,14 @@ fn get_pam_user(pamh: *const std::ffi::c_void) -> Option<String> {
 
 /// Check if running in a terminal
 fn is_terminal() -> bool {
-    unsafe { isatty(0) == 1 }
+    unsafe { isatty(STDIN_FILENO) == 1 }
 }
 
 /// Flush terminal input buffer
 fn flush_terminal() {
-    use nix::unistd::STDIN_FILENO;
-    use nix::ioctl::*;
-    use libc::TCIFLUSH;
-
     unsafe {
         let _ = tcflush(STDIN_FILENO, TCIFLUSH);
     }
-}
-
-extern "C" {
-    /// Flush terminal input
-    pub fn tcflush(fd: i32, queue_selector: i32) -> i32;
 }
 
 /// Main PAM authentication entry point
@@ -160,10 +160,10 @@ pub extern "C" fn pam_sm_authenticate(
     // Spawn password authentication task
     let pwd_data = Arc::clone(&auth_data);
     let pwd_username = username.clone();
-    let pwd_pamh = pamh;
+    let pwd_auth_data_ptr = &*pwd_data as *const AuthData as *mut std::ffi::c_void;
     
     let pwd_handle = std::thread::spawn(move || {
-        let _ = password::check_password(&pwd_username, pwd_pamh, &pwd_data);
+        let _ = password::check_password(&pwd_username, pamh, pwd_auth_data_ptr);
     });
 
     // Wait for either thread to complete or timeout
@@ -183,7 +183,7 @@ pub extern "C" fn pam_sm_authenticate(
         std::thread::sleep(Duration::from_millis(50));
     }
 
-    // Wait for threads to complete with timeout
+    // Wait for threads to complete
     let _ = fp_handle.join();
     let _ = pwd_handle.join();
 
