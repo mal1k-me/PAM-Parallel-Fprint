@@ -32,23 +32,39 @@ pub enum AuthResult {
 
 /// PAM error codes
 const PAM_SUCCESS: c_int = 0;
+#[allow(dead_code)] // For future use
 const PAM_OPEN_ERR: c_int = 1;
+#[allow(dead_code)] // For future use
 const PAM_SYMBOL_ERR: c_int = 2;
+#[allow(dead_code)] // For future use
 const PAM_SERVICE_ERR: c_int = 3;
+#[allow(dead_code)] // For future use
 const PAM_SYSTEM_ERR: c_int = 4;
+#[allow(dead_code)] // For future use
 const PAM_BUF_ERR: c_int = 5;
+#[allow(dead_code)] // For future use
 const PAM_PERM_DENIED: c_int = 6;
 const PAM_AUTH_ERR: c_int = 7;
+#[allow(dead_code)] // For future use
 const PAM_CRED_INSUFFICIENT: c_int = 8;
+#[allow(dead_code)] // For future use
 const PAM_AUTHINFO_UNAVAIL: c_int = 9;
 const PAM_USER_UNKNOWN: c_int = 10;
+#[allow(dead_code)] // For future use
 const PAM_MAXTRIES: c_int = 11;
+#[allow(dead_code)] // For future use
 const PAM_NEW_AUTHTOK_REQD: c_int = 12;
+#[allow(dead_code)] // For future use
 const PAM_ACCT_EXPIRED: c_int = 13;
+#[allow(dead_code)] // For future use
 const PAM_SESSION_ERR: c_int = 14;
+#[allow(dead_code)] // For future use
 const PAM_CRED_UNAVAIL: c_int = 15;
+#[allow(dead_code)] // For future use
 const PAM_CRED_EXPIRED: c_int = 16;
+#[allow(dead_code)] // For future use
 const PAM_CRED_ERR: c_int = 17;
+#[allow(dead_code)] // For future use
 const PAM_NO_MODULE_DATA: c_int = 18;
 const PAM_IGNORE: c_int = 25;
 
