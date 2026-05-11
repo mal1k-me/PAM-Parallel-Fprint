@@ -6,15 +6,14 @@ authors = ["Selim Cifci"]
 description = "A Linux-PAM module that allows for fingerprint (fprintd) and password authorization in parallel"
 license = "GPL-3.0"
 
-[[lib]]
+[lib]
 name = "pam_parallel_fprint"
 crate-type = ["cdylib"]
 path = "src/lib.rs"
 
 [dependencies]
 pam = "0.7"
-zbus = { version = "4.0", default-features = false, features = ["blocking"] }
-tokio = { version = "1", features = ["rt", "sync", "time"] }
+zbus = { version = "4.4", features = ["blocking"] }
 syslog = "6.1"
 log = "0.4"
 libc = "0.2"
