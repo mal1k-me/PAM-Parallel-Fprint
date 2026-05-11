@@ -27,13 +27,7 @@ pub fn check_fingerprint(
         .map_err(|e| format!("Failed to connect to D-Bus: {}", e))?;
 
     // Get default device path
-    let device_path = match get_default_device(&conn) {
-        Ok(path) => path,
-        Err(e) => {
-            // fprintd not available or error
-            return Err(e);
-        }
-    };
+    let device_path = get_default_device(&conn)?;
 
     // Claim device with retry logic
     let mut retries = 0;
@@ -62,48 +56,76 @@ pub fn check_fingerprint(
 
 /// Get default fingerprint device path from fprintd
 fn get_default_device(conn: &Connection) -> Result<ObjectPath, String> {
-    // Call GetDefaultDevice method which returns an object path
-    let path: ObjectPath = conn
-        .call_method(
-            Some(FPRINTD_SERVICE),
-            FPRINTD_MANAGER_PATH,
-            Some(FPRINTD_MANAGER_IFACE),
-            "GetDefaultDevice",
-            &(),
-        )
-        .map_err(|e| format!("Failed to get default device: {}", e))?;
-    Ok(path)
+    // Use DBus message API to call GetDefaultDevice
+    let msg = zbus::Message::method(
+        Some(FPRINTD_SERVICE),
+        FPRINTD_MANAGER_PATH,
+        Some(FPRINTD_MANAGER_IFACE),
+        "GetDefaultDevice",
+    )
+    .map_err(|e| format!("Failed to create method: {}", e))?
+    .build(&())
+    .map_err(|e| format!("Failed to build message: {}", e))?;
+
+    let reply = conn
+        .send_message(msg)
+        .map_err(|e| format!("Failed to call GetDefaultDevice: {}", e))?
+        .ok_or_else(|| "No reply received".to_string())?;
+
+    // Parse object path from reply
+    let body = reply.body();
+    body.deserialize::<ObjectPath>()
+        .map_err(|e| format!("Failed to parse device path: {}", e))
 }
 
 /// Claim the fingerprint device for authentication
 fn claim_device(conn: &Connection, device_path: &ObjectPath, username: &str) -> Result<(), String> {
-    conn.call_method::<()>(
+    let msg = zbus::Message::method(
         Some(FPRINTD_SERVICE),
         device_path,
         Some(FPRINTD_DEVICE_IFACE),
         "Claim",
-        &(username,),
     )
-    .map_err(|e| {
-        let err_msg = e.to_string();
-        if err_msg.contains("AlreadyInUse") {
-            "AlreadyInUse".to_string()
-        } else {
-            err_msg
-        }
-    })
+    .map_err(|e| format!("Failed to create method: {}", e))?
+    .build(&(username,))
+    .map_err(|e| format!("Failed to build message: {}", e))?;
+
+    let reply = conn
+        .send_message(msg)
+        .map_err(|e| {
+            let err_msg = e.to_string();
+            if err_msg.contains("AlreadyInUse") {
+                "AlreadyInUse".to_string()
+            } else {
+                err_msg
+            }
+        })?
+        .ok_or_else(|| "No reply received".to_string())?;
+
+    // Check if reply is an error
+    if reply.message_type() == zbus::message::Type::Error {
+        return Err("Device claim failed".to_string());
+    }
+
+    Ok(())
 }
 
 /// Start fingerprint verification on the device
 fn start_verification(conn: &Connection, device_path: &ObjectPath) -> Result<(), String> {
-    conn.call_method::<()>(
+    let msg = zbus::Message::method(
         Some(FPRINTD_SERVICE),
         device_path,
         Some(FPRINTD_DEVICE_IFACE),
         "VerifyStart",
-        &("any",),
     )
-    .map_err(|e| format!("Failed to start verification: {}", e))
+    .map_err(|e| format!("Failed to create method: {}", e))?
+    .build(&("any",))
+    .map_err(|e| format!("Failed to build message: {}", e))?;
+
+    conn.send_message(msg)
+        .map_err(|e| format!("Failed to start verification: {}", e))?;
+
+    Ok(())
 }
 
 /// Wait for fingerprint verification result with polling
@@ -112,10 +134,7 @@ fn wait_for_fingerprint(
     _device_path: &ObjectPath,
     auth_data: &Arc<Mutex<AuthData>>,
 ) -> Result<(), String> {
-    // In a production implementation, we would use D-Bus signal matching.
-    // For now, poll periodically and check for completion via timeout.
-    // The C implementation uses sd_bus_wait/process which we simulate here.
-    
+    // Poll for completion with timeout
     let start = std::time::Instant::now();
     let timeout = Duration::from_secs(30);
 
@@ -140,12 +159,18 @@ fn wait_for_fingerprint(
 
 /// Release the fingerprint device
 fn release_device(conn: &Connection, device_path: &ObjectPath) -> Result<(), String> {
-    conn.call_method::<()>(
+    let msg = zbus::Message::method(
         Some(FPRINTD_SERVICE),
         device_path,
         Some(FPRINTD_DEVICE_IFACE),
         "Release",
-        &(),
     )
-    .map_err(|e| format!("Failed to release device: {}", e))
+    .map_err(|e| format!("Failed to create method: {}", e))?
+    .build(&())
+    .map_err(|e| format!("Failed to build message: {}", e))?;
+
+    conn.send_message(msg)
+        .map_err(|e| format!("Failed to release device: {}", e))?;
+
+    Ok(())
 }

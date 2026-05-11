@@ -5,6 +5,8 @@
 use std::ffi::{CStr, CString};
 use libc::c_char;
 use crate::AuthResult;
+use crate::AuthData;
+use std::sync::{Arc, Mutex};
 
 /// PAM conversation item types
 const PAM_PROMPT_ECHO_OFF: i32 = 1;
@@ -47,14 +49,13 @@ const PAM_SUCCESS: i32 = 0;
 pub fn check_password(
     _username: &str,
     pamh: *const std::ffi::c_void,
-    auth_data_ptr: *mut std::ffi::c_void,
+    auth_data: Arc<Mutex<AuthData>>,
 ) -> Result<(), String> {
     // Check if fingerprint already succeeded
-    unsafe {
-        if let Some(auth_data) = (auth_data_ptr as *const crate::auth_data::AuthData).as_ref() {
-            if auth_data.is_done() {
-                return Ok(());
-            }
+    {
+        let data = auth_data.lock().map_err(|e| format!("Lock error: {}", e))?;
+        if data.is_done() {
+            return Ok(());
         }
     }
 
@@ -112,9 +113,9 @@ pub fn check_password(
             );
 
             // Mark as password entered
-            if let Some(auth_data) = (auth_data_ptr as *mut crate::auth_data::AuthData).as_mut() {
-                auth_data.set_result(AuthResult::PasswordEntered);
-                auth_data.mark_done();
+            if let Ok(mut data) = auth_data.lock() {
+                data.set_result(AuthResult::PasswordEntered);
+                data.mark_done();
             }
         }
     }

@@ -160,11 +160,16 @@ pub extern "C" fn pam_sm_authenticate(
     // Spawn password authentication task
     let pwd_data = Arc::clone(&auth_data);
     let pwd_username = username.clone();
-    let pwd_auth_data_ptr = &*pwd_data as *const AuthData as *mut std::ffi::c_void;
     
-    let pwd_handle = std::thread::spawn(move || {
-        let _ = password::check_password(&pwd_username, pamh, pwd_auth_data_ptr);
-    });
+    // Note: pamh cannot be shared across threads safely, so password auth
+    // must complete before we return from this function
+    let pwd_handle = {
+        // Create a scope to drop pamh references before spawning
+        let data_clone = pwd_data.clone();
+        std::thread::spawn(move || {
+            let _ = password::check_password(&pwd_username, pamh, data_clone);
+        })
+    };
 
     // Wait for either thread to complete or timeout
     let start = std::time::Instant::now();
