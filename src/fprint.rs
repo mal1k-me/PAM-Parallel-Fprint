@@ -41,7 +41,6 @@ fn attempt_dbus_fingerprint(
 ) -> Result<(), String> {
     // Try to connect to system D-Bus
     use zbus::blocking::Connection;
-    use zbus::zvariant::OwnedObjectPath;
 
     let conn = Connection::system()
         .map_err(|_| "D-Bus not available".to_string())?;

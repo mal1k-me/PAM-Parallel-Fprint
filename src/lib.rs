@@ -9,7 +9,6 @@ use std::sync::{Arc, Mutex, atomic::AtomicBool};
 use std::time::Duration;
 use std::ffi::CStr;
 use libc::{c_int, c_char};
-use std::sync::mpsc;
 
 mod auth_data;
 mod fprint;
@@ -150,7 +149,6 @@ pub extern "C" fn pam_sm_authenticate(
     // Create shared authentication data and cancellation flag
     let auth_data = Arc::new(Mutex::new(AuthData::new()));
     let should_cancel = Arc::new(AtomicBool::new(false));
-    let (tx, rx) = mpsc::channel();
 
     // Spawn fingerprint authentication task
     let fp_data = Arc::clone(&auth_data);
@@ -165,10 +163,8 @@ pub extern "C" fn pam_sm_authenticate(
     let pwd_data = Arc::clone(&auth_data);
     let pwd_cancel = Arc::clone(&should_cancel);
     let pwd_username = username.clone();
-    let pwd_tx = tx.clone();
     
     let _ = password::check_password(&pwd_username, pamh, pwd_data, pwd_cancel);
-    let _ = pwd_tx.send(());
 
     // Wait for fingerprint thread to complete or timeout
     let start = std::time::Instant::now();
