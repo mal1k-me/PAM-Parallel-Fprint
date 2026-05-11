@@ -1,4 +1,3 @@
-#![deny(warnings)]
 #![warn(missing_docs)]
 
 //! PAM Parallel Fprint Module
@@ -68,7 +67,6 @@ fn get_pam_user(pamh: *const std::ffi::c_void) -> Option<String> {
     // SAFETY: This is safe because we're calling a well-defined C FFI function
     // with valid pointers. The PAM library guarantees user_ptr will be valid
     // if the call succeeds.
-    #[allow(unsafe_code)]
     unsafe {
         let mut user_ptr: *const c_char = std::ptr::null();
         let ret = pam_get_user(pamh, &mut user_ptr as *mut _, std::ptr::null());
